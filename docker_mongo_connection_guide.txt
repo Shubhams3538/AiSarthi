@@ -1,0 +1,66 @@
+================================================================================
+                     MONGODB & MONGOSH CHEAT SHEET
+================================================================================
+
+1. WHAT IS HAPPENING (EVENT-DRIVEN DATABASE ACCUMULATION)
+--------------------------------------------------------------------------------
+Every time React mounts, refreshes, or sends a WebSocket message, your backend
+executes `WorkspaceModel.create()`. Because Mongoose assigns a unique `_id` 
+to every record by default, repeated connections continuously insert new rows.
+
+
+2. DOCKER & TERMINAL ONE-LINERS (RUN FROM MACOS TERMINAL)
+--------------------------------------------------------------------------------
+Connect to mongosh shell interactively:
+$ docker exec -it mongodb mongosh aisarthi
+
+View all documents in workspaces:
+$ docker exec -it mongodb mongosh aisarthi --eval "db.workspaces.find()"
+
+Count total documents in workspaces:
+$ docker exec -it mongodb mongosh aisarthi --eval "db.workspaces.countDocuments()"
+
+Delete all documents in workspaces (keep structure/indexes):
+$ docker exec -it mongodb mongosh aisarthi --eval "db.workspaces.deleteMany({})"
+
+Drop the workspaces collection completely:
+$ docker exec -it mongodb mongosh aisarthi --eval "db.workspaces.drop()"
+
+Drop the entire aisarthi database:
+$ docker exec -it mongodb mongosh aisarthi --eval "db.dropDatabase()"
+
+
+3. INTERACTIVE MONGOSH COMMANDS (RUN INSIDE MONGO SHELL)
+--------------------------------------------------------------------------------
+Database & Collection Navigation:
+> show dbs                                // List all databases
+> use aisarthi                            // Switch active database
+> show collections                        // List all tables/collections
+
+Reading Data:
+> db.workspaces.find()                    // Retrieve all records
+> db.workspaces.find().pretty()           // Formatted JSON output
+> db.workspaces.findOne()                 // Retrieve single record
+> db.workspaces.countDocuments()          // Get document count
+
+Filtering Data:
+> db.workspaces.find({ path: "123" })     // Find documents matching criteria
+
+Deleting Data:
+> db.workspaces.deleteOne({ _id: ObjectId("6a88e0e91c344d1425155c3d") })
+> db.workspaces.deleteMany({})            // Wipe all rows in collection
+> db.workspaces.drop()                    // Drop entire collection
+> db.dropDatabase()                       // Drop active database
+
+
+4. PREVENTING DUPLICATES IN MONGOOSE CODE
+--------------------------------------------------------------------------------
+Replace `WorkspaceModel.create()` with `findOneAndUpdate` using `upsert: true`.
+This updates the document if it exists, or creates it only if it doesn't.
+
+const workspace = await WorkspaceModel.findOneAndUpdate(
+  { path: "123" },
+  { name: "12345" },
+  { upsert: true, new: true }
+);
+================================================================================
