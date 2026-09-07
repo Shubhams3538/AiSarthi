@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+import mongoose, { type Model, type Schema as MongooseSchema } from "mongoose";
 
 /**
  * Persistence layer for the orchestrator.
@@ -9,6 +9,44 @@ import mongoose from "mongoose";
  */
 
 const { Schema } = mongoose;
+
+/* -------------------------------------------------------------------------- */
+/* Document types                                                              */
+/* -------------------------------------------------------------------------- */
+
+export interface WorkspaceDoc {
+  name: string;
+  path: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface SessionDoc {
+  workspace: mongoose.Types.ObjectId;
+  provider: string;
+  title: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface MessageDoc {
+  session: mongoose.Types.ObjectId;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface RunDoc {
+  session: mongoose.Types.ObjectId;
+  provider: string;
+  prompt: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  exitCode: number | null;
+  endedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 /* -------------------------------------------------------------------------- */
 /* Schemas                                                                     */
@@ -63,11 +101,12 @@ export const RunSchema = new Schema(
 
 // Reuse already-compiled models so hot reloading the server does not throw
 // `OverwriteModelError`.
-const model = <T>(name: string, schema: T) =>
-  (mongoose.models[name] as mongoose.Model<unknown>) ??
-  mongoose.model(name, schema as unknown as mongoose.Schema);
+function getModel<T>(name: string, schema: MongooseSchema<T>): Model<T> {
+  const existing = mongoose.models[name] as Model<T> | undefined;
+  return existing ?? mongoose.model<T>(name, schema);
+}
 
-export const WorkspaceModel = model("Workspace", WorkspaceSchema);
-export const SessionModel = model("Session", SessionSchema);
-export const MessageModel = model("Message", MessageSchema);
-export const RunModel = model("Run", RunSchema);
+export const WorkspaceModel = getModel<WorkspaceDoc>("Workspace", WorkspaceSchema);
+export const SessionModel = getModel<SessionDoc>("Session", SessionSchema);
+export const MessageModel = getModel<MessageDoc>("Message", MessageSchema);
+export const RunModel = getModel<RunDoc>("Run", RunSchema);
