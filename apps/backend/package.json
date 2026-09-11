@@ -12,9 +12,10 @@
   "dependencies": {
     "@types/mongoose": "^5.11.97",
     "@types/ws": "^8.18.1",
+    "agents": "*",
+    "commons": "*",
     "db": "*",
     "mongoose": "^9.9.3",
-    "ws": "^8.21.3",
-    "commons": "*"
+    "ws": "^8.21.3"
   }
 }

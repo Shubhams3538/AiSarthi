@@ -3,6 +3,7 @@ import { WebSocketServer } from "ws";
 import { handleMessage } from "./src/handlers";
 import { Hub } from "./src/hub";
 import { parseClientMessage, send } from "./src/protocol";
+import { RunManager } from "./src/runs";
 
 /**
  * aiSarthi orchestrator entrypoint.
@@ -19,6 +20,7 @@ async function main(): Promise<void> {
   console.log(`Connected to MongoDB at ${DB_URL}`);
 
   const hub = new Hub();
+  const runs = new RunManager(hub);
   const server = new WebSocketServer({ port: PORT });
 
   server.on("connection", (ws) => {
@@ -33,7 +35,7 @@ async function main(): Promise<void> {
       }
 
       try {
-        await handleMessage({ ws, hub }, parsed.message);
+        await handleMessage({ ws, hub, runs }, parsed.message);
       } catch (error) {
         console.error(`Failed to handle "${parsed.message.type}":`, error);
         send(ws, {

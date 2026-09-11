@@ -4,10 +4,12 @@ import { PROVIDERS_BY_ID, type ClientMessage, type ProviderId } from "commons/ty
 import { send } from "./protocol";
 import { toMessage, toSession, toWorkspace } from "./dto";
 import type { Hub } from "./hub";
+import type { RunManager } from "./runs";
 
 export interface HandlerContext {
   ws: WebSocket;
   hub: Hub;
+  runs: RunManager;
 }
 
 const defaultTitle = (provider: ProviderId): string =>
@@ -86,12 +88,19 @@ export async function handleMessage(
       return;
     }
 
-    case "run.start":
+    case "run.start": {
+      await ctx.runs.start(message.payload.sessionId, message.payload.prompt);
+      return;
+    }
+
     case "run.cancel": {
-      send(ctx.ws, {
-        type: "error",
-        payload: { message: "Agent runs are not wired up yet" },
-      });
+      const cancelled = ctx.runs.cancel(message.payload.runId);
+      if (!cancelled) {
+        send(ctx.ws, {
+          type: "error",
+          payload: { message: `Run ${message.payload.runId} is not active` },
+        });
+      }
       return;
     }
   }
