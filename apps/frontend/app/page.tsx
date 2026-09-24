@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { AddWorkspaceModal } from "@/components/AddWorkspaceModal";
+import { ChatPanel } from "@/components/ChatPanel";
 import { Sidebar } from "@/components/Sidebar";
 import { useOrchestrator } from "@/lib/orchestrator";
 
@@ -24,16 +25,18 @@ export default function Home() {
         {error ? <div className="error">{error}</div> : null}
 
         <div className="content">
-          <div className="centered">
-            <h2>
-              {!workspace
-                ? "Select a workspace"
-                : activeSessionId
-                  ? "Session ready"
-                  : "Start a new session"}
-            </h2>
-            <p>Agent transcripts and live output will render here.</p>
-          </div>
+          {activeSessionId ? (
+            <ChatPanel />
+          ) : (
+            <div className="centered">
+              <h2>{workspace ? "Start a new session" : "Select a workspace"}</h2>
+              <p>
+                {workspace
+                  ? "Pick an agent in the sidebar to open a session."
+                  : "Add a workspace to point aiSarthi at a project."}
+              </p>
+            </div>
+          )}
         </div>
       </main>
 
