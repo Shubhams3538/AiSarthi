@@ -5,9 +5,10 @@ import { useOrchestrator } from "@/lib/orchestrator";
 
 interface SidebarProps {
   onAddWorkspace: () => void;
+  onNewSession: () => void;
 }
 
-export function Sidebar({ onAddWorkspace }: SidebarProps) {
+export function Sidebar({ onAddWorkspace, onNewSession }: SidebarProps) {
   const {
     status,
     workspaces,
@@ -16,7 +17,6 @@ export function Sidebar({ onAddWorkspace }: SidebarProps) {
     activeSessionId,
     selectWorkspace,
     selectSession,
-    createSession,
   } = useOrchestrator();
 
   const workspace = workspaces.find((entry) => entry.id === activeWorkspaceId) ?? null;
@@ -57,10 +57,7 @@ export function Sidebar({ onAddWorkspace }: SidebarProps) {
         <div className="sidebar-section grow">
           <div className="section-header">
             <span>Sessions</span>
-            <button
-              className="btn ghost"
-              onClick={() => createSession({ workspaceId: workspace.id, provider: "claude" })}
-            >
+            <button className="btn ghost" onClick={onNewSession}>
               + New
             </button>
           </div>

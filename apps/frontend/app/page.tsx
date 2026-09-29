@@ -3,18 +3,23 @@
 import { useState } from "react";
 import { AddWorkspaceModal } from "@/components/AddWorkspaceModal";
 import { ChatPanel } from "@/components/ChatPanel";
+import { NewSessionModal } from "@/components/NewSessionModal";
 import { Sidebar } from "@/components/Sidebar";
 import { useOrchestrator } from "@/lib/orchestrator";
 
 export default function Home() {
   const { workspaces, activeWorkspaceId, activeSessionId, error } = useOrchestrator();
   const [adding, setAdding] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
 
   const workspace = workspaces.find((entry) => entry.id === activeWorkspaceId) ?? null;
 
   return (
     <div className="app">
-      <Sidebar onAddWorkspace={() => setAdding(true)} />
+      <Sidebar
+        onAddWorkspace={() => setAdding(true)}
+        onNewSession={() => setCreatingSession(true)}
+      />
 
       <main className="main">
         <header className="topbar">
@@ -41,6 +46,12 @@ export default function Home() {
       </main>
 
       {adding ? <AddWorkspaceModal onClose={() => setAdding(false)} /> : null}
+      {creatingSession && workspace ? (
+        <NewSessionModal
+          workspaceId={workspace.id}
+          onClose={() => setCreatingSession(false)}
+        />
+      ) : null}
     </div>
   );
 }
