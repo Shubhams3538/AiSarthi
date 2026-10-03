@@ -133,7 +133,7 @@ export class RunManager {
     const run = await RunModel.findByIdAndUpdate(
       runId,
       { status: outcome.status, exitCode: outcome.exitCode, endedAt: new Date() },
-      { new: true },
+      { returnDocument: "after" },
     );
 
     const content =

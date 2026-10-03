@@ -9,7 +9,13 @@ import type { Message, ProviderId, Run, Session, Workspace } from "commons/types
  * frontend never has to know about ObjectIds.
  */
 
-const iso = (value: Date | string): string => new Date(value).toISOString();
+// Records written before timestamps were enabled (or by an older schema) can be
+// missing their dates entirely. Never let one such document break a whole list.
+const iso = (value: Date | string | null | undefined): string => {
+  if (!value) return new Date(0).toISOString();
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
+};
 
 export function toWorkspace(doc: HydratedDocument<WorkspaceDoc>): Workspace {
   return {
