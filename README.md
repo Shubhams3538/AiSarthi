@@ -1,159 +1,106 @@
-# Turborepo starter
+# aiSarthi
 
-This Turborepo starter is maintained by the Turborepo core team.
+One UI for **Claude Code**, **Codex** and **Cursor**.
 
-## Using this example
+aiSarthi is a local coding-agent orchestrator. Instead of juggling a terminal per
+agent, you register a project as a *workspace*, open a *session* against one of
+the agent CLIs you already have installed, and drive it from a single chat view.
+Prompts are streamed as they happen and every transcript is persisted.
 
-Run the following command:
+> aiSarthi does not embed a model. It shells out to the coding agents on your
+> machine and funnels their output to the browser.
 
-```sh
-npx create-turbo@latest
+## How it works
+
+```
+┌──────────────┐        WebSocket (JSON)        ┌──────────────┐
+│  Next.js UI  │  ───────────────────────────▶  │   backend    │
+│ apps/frontend│  ◀───────────────────────────  │ apps/backend │
+└──────────────┘   { type, payload } frames      └──────┬───────┘
+                                                        │
+                        ┌───────────────────────────────┼───────────────────┐
+                        │                               │                   │
+                   ┌────▼────┐                    ┌─────▼─────┐       ┌──────▼──────┐
+                   │   db    │                    │  agents   │       │   commons   │
+                   │ mongoose│                    │ spawn CLI │       │ schemas +   │
+                   └─────────┘                    └───────────┘       │  protocol   │
+                                                                      └─────────────┘
 ```
 
-## What's inside?
+- **`packages/commons`** — the single source of truth for the wire protocol:
+  zod schemas for workspaces, sessions, messages, runs and every WebSocket
+  frame, plus provider metadata. Backend and frontend both import it.
+- **`packages/db`** — Mongoose models (`Workspace`, `Session`, `Message`,
+  `Run`) and the document types consumers rely on.
+- **`packages/agents`** — provider adapters. Each CLI has a different
+  non-interactive entry point, so `startAgent()` normalises command building,
+  spawning, output streaming and cancellation behind one interface.
+- **`apps/backend`** — connects to MongoDB, opens the WebSocket server and
+  routes validated frames to handlers. `RunManager` owns agent lifecycles:
+  it records the prompt, spawns the CLI in the workspace directory, streams
+  `run.output` frames and persists the result as an assistant message.
+- **`apps/frontend`** — a Next.js App Router UI. `lib/orchestrator.tsx` holds
+  the single WebSocket connection and exposes it as React state; the sidebar and
+  chat panel are pure consumers of that state.
 
-This Turborepo includes the following packages/apps:
+## Providers
 
-### Apps and Packages
+| Provider    | Binary         | Non-interactive command                  |
+| ----------- | -------------- | ---------------------------------------- |
+| Claude Code | `claude`       | `claude -p <prompt> --output-format ...` |
+| Codex       | `codex`        | `codex exec <prompt>`                    |
+| Cursor      | `cursor-agent` | `cursor-agent -p <prompt>`               |
 
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
+Install and authenticate at least one of these before running a session.
 
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
+## Getting started
 
-### Utilities
+1. **Start MongoDB.** The repo ships with a Docker setup:
 
-This Turborepo has some additional tools already setup for you:
+   ```bash
+   docker start mongodb   # or: docker run -d -p 27017:27017 --name mongodb mongo
+   ```
 
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
+2. **Install and run:**
 
-### Build
+   ```bash
+   bun install
+   bun run dev
+   ```
 
-To build all apps and packages, run the following command:
+   This starts the orchestrator on `ws://localhost:3000` and the UI on
+   <http://localhost:3001>.
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+3. Open the UI, add a workspace pointing at a project folder, create a session
+   and pick an agent.
 
-```sh
-cd my-turborepo
-turbo build
+### Environment
+
+| Variable              | Where           | Default                              |
+| --------------------- | --------------- | ------------------------------------ |
+| `DB_URL`              | `apps/backend`  | `mongodb://localhost:27017/aisarthi` |
+| `PORT`                | `apps/backend`  | `3000`                               |
+| `NEXT_PUBLIC_WS_URL`  | `apps/frontend` | `ws://localhost:3000`                |
+
+## Scripts
+
+```bash
+bun run dev          # run every app in watch mode
+bun run build        # build everything
+bun run check-types  # type-check every package and app
+bun run lint         # lint
+bun run format       # prettier
 ```
 
-Without global `turbo`, use your package manager:
+## Project layout
 
-```sh
-cd my-turborepo
-npx turbo build
-bun dlx turbo build
-bun exec turbo build
 ```
-
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo build --filter=docs
+apps/
+  backend/     WebSocket orchestrator + MongoDB
+  frontend/    Next.js UI
+packages/
+  agents/      CLI provider adapters
+  commons/     Shared schemas and protocol types
+  db/          Mongoose models
+  eslint-config/ typescript-config/ ui/   (from the Turborepo starter)
 ```
-
-Without global `turbo`:
-
-```sh
-npx turbo build --filter=docs
-bun exec turbo build --filter=docs
-bun exec turbo build --filter=docs
-```
-
-### Develop
-
-To develop all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo dev
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo dev
-bun exec turbo dev
-bun exec turbo dev
-```
-
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo dev --filter=web
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo dev --filter=web
-bun exec turbo dev --filter=web
-bun exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-bun exec turbo login
-bun exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-bun exec turbo link
-bun exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)

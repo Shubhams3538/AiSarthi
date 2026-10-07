@@ -1,15 +1,30 @@
 # backend
 
-To install dependencies:
+The aiSarthi orchestrator. Connects to MongoDB and serves the WebSocket API the
+UI drives.
+
+## Running
 
 ```bash
-bun install
+bun install          # from the repo root
+bun run index.ts     # from apps/backend
 ```
 
-To run:
+Requires a MongoDB instance reachable at `DB_URL` (defaults to
+`mongodb://localhost:27017/aisarthi`). See `.env.example`.
 
-```bash
-bun run index.ts
-```
+## Layout
 
-This project was created using `bun init` in bun v1.3.11. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+| File               | Responsibility                                            |
+| ------------------ | --------------------------------------------------------- |
+| `index.ts`         | Bootstrap: connect Mongo, start the WebSocket server.     |
+| `src/protocol.ts`  | Parse/validate inbound frames, serialise outbound frames. |
+| `src/hub.ts`       | Track connected clients and broadcast server messages.    |
+| `src/handlers.ts`  | Route a validated message to the code that owns it.       |
+| `src/runs.ts`      | Spawn agents, stream output, persist transcripts.         |
+| `src/dto.ts`       | Mongo documents → wire DTOs.                              |
+
+## Protocol
+
+Every frame is `{ "type": "...", "payload": { ... } }`. The full set of client
+and server messages is defined in `packages/commons`.
