@@ -41,17 +41,26 @@ export interface AgentProcess {
 }
 
 /** Build the argv used to invoke a provider non-interactively. */
-export function buildCommand(provider: ProviderId, prompt: string): AgentCommand {
+export function buildCommand(
+  provider: ProviderId,
+  prompt: string,
+): AgentCommand {
   switch (provider) {
     case "claude":
       return {
         bin: "claude",
-        args: ["-p", prompt, "--output-format", "stream-json", "--verbose"],
+        args: ["-p", "--output-format", "text"],
       };
     case "codex":
-      return { bin: "codex", args: ["exec", prompt] };
+      return {
+        bin: "codex",
+        args: ["exec", "--sandbox", "workspace-write", "--color", "never", "-"],
+      };
     case "cursor":
-      return { bin: "cursor-agent", args: ["-p", prompt] };
+      return {
+        bin: "cursor-agent",
+        args: ["-p", prompt, "--output-format", "text"],
+      };
   }
 }
 
@@ -77,32 +86,70 @@ export function startAgent(options: StartAgentOptions): AgentProcess {
 
   const proc = Bun.spawn([bin, ...args], {
     cwd: options.cwd,
-    env: { ...process.env, ...options.env } as Record<string, string | undefined>,
+    detached: process.platform !== "win32",
+    env: { ...process.env, ...options.env } as Record<
+      string,
+      string | undefined
+    >,
+    stdin:
+      options.provider === "cursor" ? "ignore" : new Response(options.prompt),
     stdout: "pipe",
     stderr: "pipe",
   });
 
   let cancelled = false;
+  let settled = false;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const pump = async (stream: "stdout" | "stderr", source: ReadableStream<Uint8Array>) => {
-    const decoder = new TextDecoder();
-    for await (const chunk of source) {
-      options.onOutput({ stream, chunk: decoder.decode(chunk) });
+  const signal = (value: "SIGTERM" | "SIGKILL") => {
+    try {
+      if (process.platform === "win32") proc.kill(value);
+      else process.kill(-proc.pid, value);
+    } catch (error) {
+      if ((error as { code?: string }).code !== "ESRCH") throw error;
     }
   };
 
+  const pump = async (
+    stream: "stdout" | "stderr",
+    source: ReadableStream<Uint8Array>,
+  ) => {
+    const decoder = new TextDecoder();
+    for await (const chunk of source) {
+      options.onOutput({
+        stream,
+        chunk: decoder.decode(chunk, { stream: true }),
+      });
+    }
+    const tail = decoder.decode();
+    if (tail) options.onOutput({ stream, chunk: tail });
+  };
+
   const done = (async (): Promise<AgentResult> => {
-    await Promise.all([pump("stdout", proc.stdout), pump("stderr", proc.stderr)]);
-    const exitCode = await proc.exited;
-    return { exitCode, cancelled };
+    try {
+      await Promise.all([
+        pump("stdout", proc.stdout),
+        pump("stderr", proc.stderr),
+      ]);
+      return { exitCode: await proc.exited, cancelled };
+    } catch (error) {
+      signal("SIGKILL");
+      await proc.exited;
+      throw error;
+    } finally {
+      settled = true;
+      if (killTimer) clearTimeout(killTimer);
+    }
   })();
 
   return {
     pid: proc.pid,
     done,
     cancel: () => {
+      if (cancelled || settled) return;
       cancelled = true;
-      proc.kill();
+      signal("SIGTERM");
+      killTimer = setTimeout(() => signal("SIGKILL"), 3000);
     },
   };
 }

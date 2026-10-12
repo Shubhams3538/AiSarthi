@@ -1,29 +1,18 @@
 # agents
 
-Provider adapters that spawn local AI coding agents and stream their output.
+Adapters for installed Claude Code, Codex, and Cursor CLIs. Import from
+`agents/client`. `startAgent()` returns a process handle with a `done` promise
+and `cancel()` method; stdout and stderr are drained concurrently with incremental
+UTF-8 decoding.
 
-Each provider is a thin wrapper around a CLI binary that is already installed
-and authenticated on the host:
+Claude and Codex prompts are supplied through stdin. Cursor receives a literal
+argv prompt without a shell. Output is plain text; provider buffering determines
+when it arrives. Codex uses `workspace-write`; no permission-bypass flags are
+added. Availability checks inspect the backend's PATH.
 
-| Provider | Binary         | Non-interactive invocation            |
-| -------- | -------------- | ------------------------------------- |
-| Claude   | `claude`       | `claude -p <prompt>`                  |
-| Codex    | `codex`        | `codex exec <prompt>`                 |
-| Cursor   | `cursor-agent` | `cursor-agent -p <prompt>`            |
+On macOS/Linux agents run in a separate process group. Cancellation signals that
+group, including child tools, with SIGTERM and a three-second SIGKILL fallback.
+Windows uses direct process cancellation.
 
-The package exposes a single `startAgent()` entry point which returns a handle
-with a `done` promise and a `cancel()` method so the orchestrator can fan agent
-output out over a WebSocket.
-
-```ts
-import { startAgent } from "agents/client";
-
-const agent = startAgent({
-  provider: "claude",
-  prompt: "Summarise the repo",
-  cwd: "/path/to/workspace",
-  onOutput: ({ stream, chunk }) => process.stdout.write(chunk),
-});
-
-await agent.done;
-```
+The backend provides recent conversation history and per-run credentials. No
+provider login, model, or project state is managed by this package.

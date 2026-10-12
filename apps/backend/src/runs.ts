@@ -1,158 +1,241 @@
-import { startAgent, type AgentProcess } from "agents/client";
-import { ProviderIdSchema, type ProviderId } from "commons/types";
-import { MessageModel, RunModel, SessionModel, WorkspaceModel } from "db/client";
+import {
+  startAgent,
+  isProviderAvailable,
+  type AgentProcess,
+} from "agents/client";
+import { PROVIDERS_BY_ID, ProviderIdSchema } from "commons/types";
+import {
+  MessageModel,
+  ProviderCredentialModel,
+  RunModel,
+  SessionModel,
+  WorkspaceModel,
+} from "db/client";
+import { stat } from "node:fs/promises";
 import { toMessage, toRun } from "./dto";
 import type { Hub } from "./hub";
 
 interface ActiveRun {
   sessionId: string;
-  agent: AgentProcess;
+  agent?: AgentProcess;
+  cancelled: boolean;
+  output: string;
 }
 
-interface ExecutionParams {
-  runId: string;
-  sessionId: string;
-  provider: ProviderId;
-  prompt: string;
-  cwd: string;
+// Keep recent conversation context bounded; each CLI reads project instructions itself.
+export function conversationPrompt(
+  history: { role: string; content: string }[],
+  prompt: string,
+): string {
+  if (!history.length) return prompt;
+  const recent: typeof history = [];
+  let remaining = 24000;
+  for (const message of history.slice(-12).reverse()) {
+    if (remaining <= 0) break;
+    const content = message.content.slice(-remaining);
+    recent.unshift({ role: message.role, content });
+    remaining -= content.length;
+  }
+  return `Continue this aiSarthi conversation. Previous messages are context for the current request.\n${JSON.stringify(recent)}\n\nCurrent request:\n${prompt}`;
 }
 
-/**
- * Owns the lifecycle of agent runs.
- *
- * Starting a run records the user's prompt, spawns the provider CLI inside the
- * workspace directory and streams stdout/stderr to every connected client. When
- * the process exits the transcript is persisted as an assistant message and the
- * run record is finalised.
- */
 export class RunManager {
   private readonly active = new Map<string, ActiveRun>();
+  private readonly busySessions = new Set<string>();
+  private readonly jobs = new Set<Promise<void>>();
+  private closing = false;
+  private readonly starting = new Set<Promise<void>>();
 
-  constructor(private readonly hub: Hub) {}
+  constructor(
+    private readonly hub: Hub,
+    private readonly spawn = startAgent,
+    private readonly available = isProviderAvailable,
+  ) {}
 
-  /** Stop a run if it is still active. Returns false when the run is unknown. */
+  outputFor(sessionId: string): Record<string, string> {
+    return Object.fromEntries(
+      [...this.active]
+        .filter(([, run]) => run.sessionId === sessionId)
+        .map(([id, run]) => [id, run.output]),
+    );
+  }
+
   cancel(runId: string): boolean {
     const run = this.active.get(runId);
     if (!run) return false;
-    run.agent.cancel();
+    run.cancelled = true;
+    run.agent?.cancel();
     return true;
   }
 
-  /** Validate the session, persist the prompt, then execute in the background. */
-  async start(sessionId: string, prompt: string): Promise<void> {
-    const session = await SessionModel.findById(sessionId);
-    if (!session) throw new Error(`Session ${sessionId} not found`);
-
-    const workspace = await WorkspaceModel.findById(session.workspace);
-    if (!workspace) throw new Error(`Workspace ${String(session.workspace)} not found`);
-
-    const provider = ProviderIdSchema.parse(session.provider);
-
-    const userMessage = await MessageModel.create({
-      session: session._id,
-      role: "user",
-      content: prompt,
-    });
-    this.hub.broadcast({
-      type: "message.created",
-      payload: { message: toMessage(userMessage) },
-    });
-
-    const run = await RunModel.create({
-      session: session._id,
-      provider,
-      prompt,
-      status: "running",
-    });
-    this.hub.broadcast({ type: "run.started", payload: { run: toRun(run) } });
-
-    void this.execute({
-      runId: String(run._id),
-      sessionId: String(session._id),
-      provider,
-      prompt,
-      cwd: workspace.path,
-    });
+  async shutdown(): Promise<void> {
+    this.closing = true;
+    for (const id of this.active.keys()) this.cancel(id);
+    await Promise.allSettled([...this.starting]);
+    for (const id of this.active.keys()) this.cancel(id);
+    await Promise.allSettled([...this.jobs]);
   }
 
-  private async execute(params: ExecutionParams): Promise<void> {
-    const { runId, sessionId, provider, prompt, cwd } = params;
-    let stdout = "";
-    let stderr = "";
+  start(sessionId: string, prompt: string, requestId?: string): Promise<void> {
+    const pending = this.prepare(sessionId, prompt, requestId).finally(() =>
+      this.starting.delete(pending),
+    );
+    this.starting.add(pending);
+    return pending;
+  }
 
+  private async prepare(
+    sessionId: string,
+    prompt: string,
+    requestId?: string,
+  ): Promise<void> {
+    if (this.closing) throw new Error("Orchestrator is shutting down");
+    if (this.busySessions.has(sessionId))
+      throw new Error("This session already has a running agent");
+    this.busySessions.add(sessionId);
     try {
-      const agent = startAgent({
+      const session = await SessionModel.findById(sessionId);
+      if (!session) throw new Error("Session not found");
+      const workspace = await WorkspaceModel.findById(session.workspace);
+      if (!workspace) throw new Error("Workspace not found");
+      const provider = ProviderIdSchema.parse(session.provider);
+      if (!this.available(provider))
+        throw new Error(
+          `${PROVIDERS_BY_ID[provider].binary} is not installed on PATH`,
+        );
+      if (!(await stat(workspace.path)).isDirectory())
+        throw new Error("Workspace path must be a directory");
+      const history = await MessageModel.find({ session: sessionId })
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(12);
+      const credential = await ProviderCredentialModel.findOne({ provider });
+      if (this.closing) throw new Error("Orchestrator is shutting down");
+      const run = await RunModel.create({
+        session: session._id,
         provider,
         prompt,
-        cwd,
-        onOutput: ({ stream, chunk }) => {
-          if (stream === "stdout") stdout += chunk;
-          else stderr += chunk;
+        status: "running",
+      });
+      const runId = String(run._id);
+      const active: ActiveRun = { sessionId, cancelled: false, output: "" };
+      this.active.set(runId, active);
+      const job = (async () => {
+        let status: "completed" | "cancelled" | "failed" = "failed";
+        let exitCode: number | null = null;
+        let stdout = "";
+        let stderr = "";
+        const onOutput = ({
+          stream,
+          chunk,
+        }: {
+          stream: "stdout" | "stderr";
+          chunk: string;
+        }) => {
+          // Bound retained output; continue draining the process even after the limit.
+          const retained = chunk.slice(
+            0,
+            Math.max(0, 2_000_000 - active.output.length),
+          );
+          if (!retained) return;
+          active.output += retained;
+          if (stream === "stdout") stdout += retained;
+          else stderr += retained;
           this.hub.broadcast({
             type: "run.output",
-            payload: { runId, sessionId, stream, chunk },
+            payload: { runId, sessionId, stream, chunk: retained },
           });
-        },
-      });
-
-      this.active.set(runId, { sessionId, agent });
-      const result = await agent.done;
-      this.active.delete(runId);
-
-      const status = result.cancelled
-        ? "cancelled"
-        : result.exitCode === 0
-          ? "completed"
-          : "failed";
-
-      await this.finalize(runId, sessionId, {
-        status,
-        exitCode: result.exitCode,
-        stdout,
-        stderr,
-      });
+        };
+        try {
+          const userMessage = await MessageModel.create({
+            session: sessionId,
+            role: "user",
+            content: prompt,
+          });
+          this.hub.broadcast({
+            type: "message.created",
+            payload: { message: toMessage(userMessage) },
+          });
+          this.hub.broadcast({
+            type: "run.started",
+            requestId,
+            payload: { run: toRun(run) },
+          });
+          if (this.closing) active.cancelled = true;
+          if (!active.cancelled) {
+            active.agent = this.spawn({
+              provider,
+              cwd: workspace.path,
+              prompt: conversationPrompt(history.reverse(), prompt),
+              env: credential
+                ? {
+                    [PROVIDERS_BY_ID[provider].apiKeyEnvVar]: credential.apiKey,
+                  }
+                : undefined,
+              onOutput,
+            });
+            const result = await active.agent.done;
+            exitCode = result.exitCode;
+            active.cancelled ||= result.cancelled;
+          }
+          status = active.cancelled
+            ? "cancelled"
+            : exitCode === 0
+              ? "completed"
+              : "failed";
+        } catch (error) {
+          onOutput({
+            stream: "stderr",
+            chunk: `\n${error instanceof Error ? error.message : String(error)}`,
+          });
+          status = active.cancelled ? "cancelled" : "failed";
+        }
+        const content =
+          [stdout.trim(), status === "failed" ? stderr.trim() : ""]
+            .filter(Boolean)
+            .join("\n\n") ||
+          stderr.trim() ||
+          (status === "cancelled"
+            ? "Run cancelled."
+            : "The agent exited without producing output.");
+        const assistant = await MessageModel.create({
+          session: sessionId,
+          role: "assistant",
+          content,
+        });
+        const finished = await RunModel.findByIdAndUpdate(
+          runId,
+          { status, exitCode, endedAt: new Date(), output: active.output },
+          { returnDocument: "after" },
+        );
+        this.hub.broadcast({
+          type: "message.created",
+          payload: { message: toMessage(assistant) },
+        });
+        if (finished)
+          this.hub.broadcast({
+            type: "run.completed",
+            payload: { run: toRun(finished) },
+          });
+      })()
+        .catch((error) => {
+          console.error("Failed to persist run outcome:", error);
+          this.hub.broadcast({
+            type: "error",
+            payload: {
+              message:
+                "Could not save the run outcome. Reconnect to reload its state.",
+            },
+          });
+        })
+        .finally(() => {
+          this.active.delete(runId);
+          this.busySessions.delete(sessionId);
+          this.jobs.delete(job);
+        });
+      this.jobs.add(job);
     } catch (error) {
-      // Most commonly this is `ENOENT`: the provider binary is not installed.
-      this.active.delete(runId);
-      const message = error instanceof Error ? error.message : String(error);
-
-      await this.finalize(runId, sessionId, {
-        status: "failed",
-        exitCode: null,
-        stdout,
-        stderr: stderr ? `${stderr}\n${message}` : message,
-      });
-    }
-  }
-
-  private async finalize(
-    runId: string,
-    sessionId: string,
-    outcome: { status: "completed" | "failed" | "cancelled"; exitCode: number | null; stdout: string; stderr: string },
-  ): Promise<void> {
-    const run = await RunModel.findByIdAndUpdate(
-      runId,
-      { status: outcome.status, exitCode: outcome.exitCode, endedAt: new Date() },
-      { returnDocument: "after" },
-    );
-
-    const content =
-      outcome.stdout.trim() ||
-      outcome.stderr.trim() ||
-      "(the agent exited without producing any output)";
-
-    const assistantMessage = await MessageModel.create({
-      session: sessionId,
-      role: "assistant",
-      content,
-    });
-    this.hub.broadcast({
-      type: "message.created",
-      payload: { message: toMessage(assistantMessage) },
-    });
-
-    if (run) {
-      this.hub.broadcast({ type: "run.completed", payload: { run: toRun(run) } });
+      this.busySessions.delete(sessionId);
+      throw error;
     }
   }
 }

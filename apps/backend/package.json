@@ -4,7 +4,9 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "check-types": "tsc --noEmit"
+    "dev": "bun --watch index.ts",
+    "check-types": "tsc --noEmit",
+    "start": "bun index.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"

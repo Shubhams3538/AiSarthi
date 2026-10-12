@@ -8,25 +8,48 @@ interface AddWorkspaceModalProps {
 }
 
 export function AddWorkspaceModal({ onClose }: AddWorkspaceModalProps) {
-  const { createWorkspace } = useOrchestrator();
+  const { createWorkspace, status } = useOrchestrator();
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
 
-  const submit = (event: FormEvent) => {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!name.trim() || !path.trim()) return;
-    createWorkspace({ name: name.trim(), path: path.trim() });
-    onClose();
+    if (pending || status !== "connected") return;
+    setPending(true);
+    setError(null);
+    try {
+      await createWorkspace({ name: name.trim(), path: path.trim() });
+      onClose();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <form className="modal" onClick={(event) => event.stopPropagation()} onSubmit={submit}>
+      <form
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Add workspace"
+        onClick={(event) => event.stopPropagation()}
+        onSubmit={submit}
+      >
         <h2>Add workspace</h2>
         <p>Point aiSarthi at a folder on this machine.</p>
         <label className="field">
           <span>Name</span>
-          <input value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            autoFocus
+          />
         </label>
         <label className="field">
           <span>Path</span>
@@ -36,11 +59,20 @@ export function AddWorkspaceModal({ onClose }: AddWorkspaceModalProps) {
             placeholder="/Users/me/projects/app"
           />
         </label>
+        {error ? (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        ) : null}
         <div className="modal-actions">
           <button type="button" className="btn ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="btn primary">
+          <button
+            type="submit"
+            className="btn primary"
+            disabled={pending || status !== "connected"}
+          >
             Add workspace
           </button>
         </div>

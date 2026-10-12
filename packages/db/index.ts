@@ -44,6 +44,22 @@ export interface RunDoc {
   status: "running" | "completed" | "failed" | "cancelled";
   exitCode: number | null;
   endedAt: Date | null;
+  output: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * An API key for a coding-agent provider, entered on the setup page.
+ *
+ * Stored verbatim in the local database so it can be injected into the agent
+ * process environment at spawn time. This is a single-machine dev tool with no
+ * auth in front of the API, so treat the database as the same trust boundary as
+ * the user's shell environment.
+ */
+export interface ProviderCredentialDoc {
+  provider: string;
+  apiKey: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -62,7 +78,12 @@ export const WorkspaceSchema = new Schema(
 
 export const SessionSchema = new Schema(
   {
-    workspace: { type: Schema.Types.ObjectId, ref: "Workspace", required: true, index: true },
+    workspace: {
+      type: Schema.Types.ObjectId,
+      ref: "Workspace",
+      required: true,
+      index: true,
+    },
     provider: { type: String, required: true },
     title: { type: String, required: true },
   },
@@ -71,8 +92,17 @@ export const SessionSchema = new Schema(
 
 export const MessageSchema = new Schema(
   {
-    session: { type: Schema.Types.ObjectId, ref: "Session", required: true, index: true },
-    role: { type: String, enum: ["user", "assistant", "system"], required: true },
+    session: {
+      type: Schema.Types.ObjectId,
+      ref: "Session",
+      required: true,
+      index: true,
+    },
+    role: {
+      type: String,
+      enum: ["user", "assistant", "system"],
+      required: true,
+    },
     content: { type: String, required: true },
   },
   { timestamps: true },
@@ -80,7 +110,12 @@ export const MessageSchema = new Schema(
 
 export const RunSchema = new Schema(
   {
-    session: { type: Schema.Types.ObjectId, ref: "Session", required: true, index: true },
+    session: {
+      type: Schema.Types.ObjectId,
+      ref: "Session",
+      required: true,
+      index: true,
+    },
     provider: { type: String, required: true },
     prompt: { type: String, required: true },
     status: {
@@ -91,6 +126,16 @@ export const RunSchema = new Schema(
     },
     exitCode: { type: Number, default: null },
     endedAt: { type: Date, default: null },
+    output: { type: String, default: "" },
+  },
+  { timestamps: true },
+);
+
+// One credential per provider; saving again replaces the existing key.
+export const ProviderCredentialSchema = new Schema(
+  {
+    provider: { type: String, required: true, unique: true, index: true },
+    apiKey: { type: String, required: true },
   },
   { timestamps: true },
 );
@@ -106,7 +151,14 @@ function getModel<T>(name: string, schema: MongooseSchema<T>): Model<T> {
   return existing ?? mongoose.model<T>(name, schema);
 }
 
-export const WorkspaceModel = getModel<WorkspaceDoc>("Workspace", WorkspaceSchema);
+export const WorkspaceModel = getModel<WorkspaceDoc>(
+  "Workspace",
+  WorkspaceSchema,
+);
 export const SessionModel = getModel<SessionDoc>("Session", SessionSchema);
 export const MessageModel = getModel<MessageDoc>("Message", MessageSchema);
 export const RunModel = getModel<RunDoc>("Run", RunSchema);
+export const ProviderCredentialModel = getModel<ProviderCredentialDoc>(
+  "ProviderCredential",
+  ProviderCredentialSchema,
+);

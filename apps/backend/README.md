@@ -1,30 +1,20 @@
 # backend
 
-The aiSarthi orchestrator. Connects to MongoDB and serves the WebSocket API the
-UI drives.
+The Bun/MongoDB orchestrator for aiSarthi. From the repository root, start MongoDB
+and run `bun run dev`. For backend only, run `bun run dev` in this directory.
+`bun run start` runs without file watching.
 
-## Running
+`index.ts` reads environment settings; `src/server.ts` starts a loopback HTTP and
+WebSocket server after connecting MongoDB and repairing interrupted run states.
+`GET /health` reports database availability. Browser connections must have an
+allowed Origin and localhost/127.0.0.1 Host.
 
-```bash
-bun install          # from the repo root
-bun run index.ts     # from apps/backend
-```
+- `src/protocol.ts`: validate inbound frames and serialize outbound frames.
+- `src/hub.ts`: connected-client broadcasts.
+- `src/handlers.ts`: workspace, session, credential, and run requests.
+- `src/runs.ts`: recent conversation context, session run locking, cancellation,
+  process output, persistence, and shutdown.
+- `src/dto.ts`: Mongo documents to wire records, without credential secrets.
+- `tests/`: protocol/adapter checks and real MongoDB/WebSocket/subprocess tests.
 
-Requires a MongoDB instance reachable at `DB_URL` (defaults to
-`mongodb://localhost:27017/aisarthi`). See `.env.example`.
-
-## Layout
-
-| File               | Responsibility                                            |
-| ------------------ | --------------------------------------------------------- |
-| `index.ts`         | Bootstrap: connect Mongo, start the WebSocket server.     |
-| `src/protocol.ts`  | Parse/validate inbound frames, serialise outbound frames. |
-| `src/hub.ts`       | Track connected clients and broadcast server messages.    |
-| `src/handlers.ts`  | Route a validated message to the code that owns it.       |
-| `src/runs.ts`      | Spawn agents, stream output, persist transcripts.         |
-| `src/dto.ts`       | Mongo documents → wire DTOs.                              |
-
-## Protocol
-
-Every frame is `{ "type": "...", "payload": { ... } }`. The full set of client
-and server messages is defined in `packages/commons`.
+Use the root README for configuration, commands, and security/validation limits.

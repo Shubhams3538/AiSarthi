@@ -1,6 +1,20 @@
 import type { HydratedDocument } from "mongoose";
-import type { MessageDoc, RunDoc, SessionDoc, WorkspaceDoc } from "db/client";
-import type { Message, ProviderId, Run, Session, Workspace } from "commons/types";
+import type {
+  MessageDoc,
+  ProviderCredentialDoc,
+  RunDoc,
+  SessionDoc,
+  WorkspaceDoc,
+} from "db/client";
+import { PROVIDERS } from "commons/types";
+import type {
+  Message,
+  ProviderCredential,
+  ProviderId,
+  Run,
+  Session,
+  Workspace,
+} from "commons/types";
 
 /**
  * Mongo documents -> wire DTOs.
@@ -44,6 +58,28 @@ export function toMessage(doc: HydratedDocument<MessageDoc>): Message {
     content: doc.content,
     createdAt: iso(doc.createdAt),
   };
+}
+
+/**
+ * Deliberately drops the key. The UI only needs to know whether a provider is
+ * configured, never the secret itself.
+ */
+export function toCredential(doc: HydratedDocument<ProviderCredentialDoc>): ProviderCredential {
+  return {
+    provider: doc.provider as ProviderId,
+    configured: Boolean(doc.apiKey),
+    updatedAt: iso(doc.updatedAt),
+  };
+}
+
+/** Every provider, so the setup page always renders a full list. */
+export function toCredentialList(
+  docs: HydratedDocument<ProviderCredentialDoc>[],
+): ProviderCredential[] {
+  const byProvider = new Map(docs.map((doc) => [doc.provider, toCredential(doc)]));
+  return PROVIDERS.map(
+    ({ id }) => byProvider.get(id) ?? { provider: id, configured: false, updatedAt: null },
+  );
 }
 
 export function toRun(doc: HydratedDocument<RunDoc>): Run {

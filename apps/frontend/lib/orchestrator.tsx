@@ -10,9 +10,11 @@ import {
   useRef,
   type ReactNode,
 } from "react";
+import { ServerMessageSchema } from "commons/types";
 import type {
   ClientMessage,
   Message,
+  ProviderCredential,
   ProviderId,
   Run,
   ServerMessage,
@@ -29,7 +31,7 @@ import type {
  * filters events down to the workspace/session the user is currently viewing.
  */
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:3000";
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://127.0.0.1:3000";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
@@ -39,6 +41,11 @@ export interface OrchestratorState {
   sessions: Session[];
   messages: Message[];
   runs: Run[];
+  /** Configured API keys per provider — never the secrets themselves. */
+  credentials: ProviderCredential[];
+  providers: { id: ProviderId; available: boolean }[];
+  loadingSession: boolean;
+  startingSessionId: string | null;
   /** Live output keyed by run id, accumulated as `run.output` frames arrive. */
   output: Record<string, string>;
   activeWorkspaceId: string | null;
@@ -46,12 +53,16 @@ export interface OrchestratorState {
   error: string | null;
 }
 
-const initialState: OrchestratorState = {
+export const initialState: OrchestratorState = {
   status: "connecting",
   workspaces: [],
   sessions: [],
   messages: [],
   runs: [],
+  credentials: [],
+  providers: [],
+  loadingSession: false,
+  startingSessionId: null,
   output: {},
   activeWorkspaceId: null,
   activeSessionId: null,
@@ -63,7 +74,8 @@ type Action =
   | { type: "server"; message: ServerMessage }
   | { type: "selectWorkspace"; workspaceId: string | null }
   | { type: "selectSession"; sessionId: string | null }
-  | { type: "dismissError" };
+  | { type: "dismissError" }
+  | { type: "startPending"; sessionId: string };
 
 function upsert<T extends { id: string }>(list: T[], item: T): T[] {
   const index = list.findIndex((entry) => entry.id === item.id);
@@ -73,10 +85,26 @@ function upsert<T extends { id: string }>(list: T[], item: T): T[] {
   return next;
 }
 
-function reducer(state: OrchestratorState, action: Action): OrchestratorState {
+function upsertCredential(
+  list: ProviderCredential[],
+  item: ProviderCredential,
+): ProviderCredential[] {
+  const index = list.findIndex((entry) => entry.provider === item.provider);
+  if (index === -1) return [...list, item];
+  const next = list.slice();
+  next[index] = item;
+  return next;
+}
+
+export function reducer(
+  state: OrchestratorState,
+  action: Action,
+): OrchestratorState {
   switch (action.type) {
     case "connection":
-      return { ...state, status: action.status };
+      return { ...state, status: action.status, startingSessionId: null };
+    case "startPending":
+      return { ...state, startingSessionId: action.sessionId, error: null };
 
     case "dismissError":
       return { ...state, error: null };
@@ -86,6 +114,8 @@ function reducer(state: OrchestratorState, action: Action): OrchestratorState {
         ...state,
         activeWorkspaceId: action.workspaceId,
         activeSessionId: null,
+        startingSessionId: null,
+        loadingSession: false,
         sessions: [],
         messages: [],
         runs: [],
@@ -96,6 +126,8 @@ function reducer(state: OrchestratorState, action: Action): OrchestratorState {
       return {
         ...state,
         activeSessionId: action.sessionId,
+        loadingSession: Boolean(action.sessionId),
+        startingSessionId: null,
         messages: [],
         runs: [],
         output: {},
@@ -109,18 +141,30 @@ function reducer(state: OrchestratorState, action: Action): OrchestratorState {
   }
 }
 
-function applyServerMessage(state: OrchestratorState, message: ServerMessage): OrchestratorState {
+function applyServerMessage(
+  state: OrchestratorState,
+  message: ServerMessage,
+): OrchestratorState {
   switch (message.type) {
     case "error":
-      return { ...state, error: message.payload.message };
+      return {
+        ...state,
+        error: message.payload.message,
+        startingSessionId: null,
+        loadingSession: false,
+      };
 
     case "workspace.list":
       return { ...state, workspaces: message.payload.workspaces };
 
     case "workspace.created":
-      return { ...state, workspaces: upsert(state.workspaces, message.payload.workspace) };
+      return {
+        ...state,
+        workspaces: upsert(state.workspaces, message.payload.workspace),
+      };
 
     case "session.list":
+      if (message.payload.workspaceId !== state.activeWorkspaceId) return state;
       return { ...state, sessions: message.payload.sessions };
 
     case "session.created": {
@@ -130,7 +174,20 @@ function applyServerMessage(state: OrchestratorState, message: ServerMessage): O
     }
 
     case "session.messages":
-      return { ...state, messages: message.payload.messages };
+      if (message.payload.sessionId !== state.activeSessionId) return state;
+      return {
+        ...state,
+        loadingSession: false,
+        messages: state.messages.reduce(
+          (list, item) => upsert(list, item),
+          message.payload.messages,
+        ),
+        runs: state.runs.reduce(
+          (list, item) => upsert(list, item),
+          message.payload.runs,
+        ),
+        output: { ...state.output, ...message.payload.output },
+      };
 
     case "message.created": {
       const { message: created } = message.payload;
@@ -143,6 +200,7 @@ function applyServerMessage(state: OrchestratorState, message: ServerMessage): O
       if (run.sessionId !== state.activeSessionId) return state;
       return {
         ...state,
+        startingSessionId: null,
         runs: upsert(state.runs, run),
         output: { ...state.output, [run.id]: state.output[run.id] ?? "" },
       };
@@ -153,12 +211,46 @@ function applyServerMessage(state: OrchestratorState, message: ServerMessage): O
       if (sessionId !== state.activeSessionId) return state;
       return {
         ...state,
-        output: { ...state.output, [runId]: (state.output[runId] ?? "") + chunk },
+        output: {
+          ...state.output,
+          [runId]: (state.output[runId] ?? "") + chunk,
+        },
       };
     }
 
-    case "run.completed":
-      return { ...state, runs: upsert(state.runs, message.payload.run) };
+    case "run.completed": {
+      const { run } = message.payload;
+      if (run.sessionId !== state.activeSessionId) return state;
+      const output = { ...state.output };
+      delete output[run.id];
+      return { ...state, runs: upsert(state.runs, run), output };
+    }
+
+    case "credentials.list":
+      return {
+        ...state,
+        credentials: message.payload.credentials,
+        providers: message.payload.providers,
+      };
+
+    case "credentials.saved":
+      return {
+        ...state,
+        credentials: upsertCredential(
+          state.credentials,
+          message.payload.credential,
+        ),
+      };
+
+    case "credentials.deleted":
+      return {
+        ...state,
+        credentials: upsertCredential(state.credentials, {
+          provider: message.payload.provider,
+          configured: false,
+          updatedAt: null,
+        }),
+      };
 
     default:
       return state;
@@ -166,12 +258,18 @@ function applyServerMessage(state: OrchestratorState, message: ServerMessage): O
 }
 
 export interface OrchestratorValue extends OrchestratorState {
-  createWorkspace: (input: { name: string; path: string }) => void;
-  createSession: (input: { workspaceId: string; provider: ProviderId; title?: string }) => void;
+  createWorkspace: (input: { name: string; path: string }) => Promise<void>;
+  createSession: (input: {
+    workspaceId: string;
+    provider: ProviderId;
+    title?: string;
+  }) => Promise<void>;
   selectWorkspace: (workspaceId: string) => void;
   selectSession: (sessionId: string) => void;
-  startRun: (sessionId: string, prompt: string) => void;
+  startRun: (sessionId: string, prompt: string) => Promise<boolean>;
   cancelRun: (runId: string) => void;
+  saveCredential: (provider: ProviderId, apiKey: string) => Promise<void>;
+  deleteCredential: (provider: ProviderId) => Promise<void>;
   dismissError: () => void;
 }
 
@@ -180,113 +278,266 @@ const OrchestratorContext = createContext<OrchestratorValue | null>(null);
 export function OrchestratorProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const socketRef = useRef<WebSocket | null>(null);
-  // Set when the user creates a session so the matching `session.created`
-  // broadcast can be auto-selected.
-  const pendingSessionWorkspace = useRef<string | null>(null);
+  const selection = useRef<{
+    workspaceId: string | null;
+    sessionId: string | null;
+  }>({ workspaceId: null, sessionId: null });
+  const pending = useRef(
+    new Map<
+      string,
+      {
+        resolve: (message: ServerMessage) => void;
+        reject: (error: Error) => void;
+        timer: ReturnType<typeof setTimeout>;
+      }
+    >(),
+  );
 
-  const send = useCallback((message: ClientMessage) => {
+  const send = useCallback((message: ClientMessage): boolean => {
     const socket = socketRef.current;
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(message));
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      dispatch({
+        type: "server",
+        message: {
+          type: "error",
+          payload: {
+            message: "Orchestrator is offline. Reconnect before trying again.",
+          },
+        },
+      });
+      return false;
+    }
+    socket.send(JSON.stringify(message));
+    return true;
+  }, []);
+
+  const request = useCallback(
+    (message: ClientMessage) =>
+      new Promise<ServerMessage>((resolve, reject) => {
+        dispatch({ type: "dismissError" });
+        const requestId = crypto.randomUUID();
+        const timer = setTimeout(() => {
+          pending.current.delete(requestId);
+          reject(
+            new Error(
+              "The orchestrator did not respond. Reconnect and check whether the action completed.",
+            ),
+          );
+        }, 15000);
+        pending.current.set(requestId, { resolve, reject, timer });
+        if (!send({ ...message, requestId })) {
+          clearTimeout(timer);
+          pending.current.delete(requestId);
+          reject(new Error("Orchestrator is offline"));
+        }
+      }),
+    [send],
+  );
+
+  const remember = useCallback(() => {
+    try {
+      localStorage.setItem(
+        "aisarthi.selection",
+        JSON.stringify(selection.current),
+      );
+    } catch {
+      /* Storage may be unavailable. */
     }
   }, []);
 
   useEffect(() => {
+    try {
+      const saved = JSON.parse(
+        localStorage.getItem("aisarthi.selection") ?? "null",
+      );
+      if (saved && typeof saved.workspaceId === "string") {
+        selection.current = {
+          workspaceId: saved.workspaceId,
+          sessionId:
+            typeof saved.sessionId === "string" ? saved.sessionId : null,
+        };
+        dispatch({
+          type: "selectWorkspace",
+          workspaceId: selection.current.workspaceId,
+        });
+        dispatch({
+          type: "selectSession",
+          sessionId: selection.current.sessionId,
+        });
+      }
+    } catch {
+      /* Ignore invalid saved state. */
+    }
     let disposed = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
-
+    const rejectPending = () => {
+      for (const entry of pending.current.values()) {
+        clearTimeout(entry.timer);
+        entry.reject(
+          new Error(
+            "Connection closed. Reconnect and check whether the action completed.",
+          ),
+        );
+      }
+      pending.current.clear();
+    };
     const connect = () => {
       if (disposed) return;
       dispatch({ type: "connection", status: "connecting" });
-
       const socket = new WebSocket(WS_URL);
       socketRef.current = socket;
-
       socket.onopen = () => {
+        if (disposed) return;
         dispatch({ type: "connection", status: "connected" });
         send({ type: "workspace.list" });
-      };
-
-      socket.onmessage = (event) => {
-        let message: ServerMessage;
-        try {
-          message = JSON.parse(String(event.data)) as ServerMessage;
-        } catch {
-          return;
-        }
-
-        if (
-          message.type === "session.created" &&
-          pendingSessionWorkspace.current === message.payload.session.workspaceId
-        ) {
-          pendingSessionWorkspace.current = null;
-          const sessionId = message.payload.session.id;
+        send({ type: "credentials.list" });
+        const { workspaceId, sessionId } = selection.current;
+        if (workspaceId)
+          send({ type: "session.list", payload: { workspaceId } });
+        if (sessionId) {
           dispatch({ type: "selectSession", sessionId });
           send({ type: "session.messages", payload: { sessionId } });
         }
-
-        dispatch({ type: "server", message });
       };
-
+      socket.onmessage = (event) => {
+        if (disposed) return;
+        let parsed;
+        try {
+          parsed = ServerMessageSchema.safeParse(
+            JSON.parse(String(event.data)),
+          );
+        } catch {
+          return;
+        }
+        if (!parsed.success) return;
+        const message = parsed.data;
+        dispatch({ type: "server", message });
+        if (message.requestId) {
+          const entry = pending.current.get(message.requestId);
+          if (entry) {
+            clearTimeout(entry.timer);
+            pending.current.delete(message.requestId);
+            if (message.type === "error")
+              entry.reject(new Error(message.payload.message));
+            else entry.resolve(message);
+          }
+        }
+      };
       socket.onclose = () => {
         if (disposed) return;
+        rejectPending();
         dispatch({ type: "connection", status: "disconnected" });
         retryTimer = setTimeout(connect, 1500);
       };
-
       socket.onerror = () => socket.close();
     };
-
     connect();
-
     return () => {
       disposed = true;
       if (retryTimer) clearTimeout(retryTimer);
+      rejectPending();
       socketRef.current?.close();
     };
-  }, [send]);
+  }, [send, remember]);
 
   const selectWorkspace = useCallback(
     (workspaceId: string) => {
+      selection.current = { workspaceId, sessionId: null };
+      remember();
       dispatch({ type: "selectWorkspace", workspaceId });
       send({ type: "session.list", payload: { workspaceId } });
     },
-    [send],
+    [send, remember],
   );
 
   const selectSession = useCallback(
     (sessionId: string) => {
+      selection.current.sessionId = sessionId;
+      remember();
       dispatch({ type: "selectSession", sessionId });
       send({ type: "session.messages", payload: { sessionId } });
     },
-    [send],
+    [send, remember],
   );
 
   const createWorkspace = useCallback(
-    (input: { name: string; path: string }) => send({ type: "workspace.create", payload: input }),
-    [send],
+    async (input: { name: string; path: string }) => {
+      const response = await request({
+        type: "workspace.create",
+        payload: input,
+      });
+      if (response.type === "workspace.created")
+        selectWorkspace(response.payload.workspace.id);
+    },
+    [request, selectWorkspace],
   );
 
   const createSession = useCallback(
-    (input: { workspaceId: string; provider: ProviderId; title?: string }) => {
-      pendingSessionWorkspace.current = input.workspaceId;
-      send({ type: "session.create", payload: input });
+    async (input: {
+      workspaceId: string;
+      provider: ProviderId;
+      title?: string;
+    }) => {
+      const response = await request({
+        type: "session.create",
+        payload: input,
+      });
+      if (
+        response.type === "session.created" &&
+        selection.current.workspaceId === input.workspaceId
+      )
+        selectSession(response.payload.session.id);
     },
-    [send],
+    [request, selectSession],
   );
 
   const startRun = useCallback(
-    (sessionId: string, prompt: string) =>
-      send({ type: "run.start", payload: { sessionId, prompt } }),
-    [send],
+    async (sessionId: string, prompt: string) => {
+      dispatch({ type: "startPending", sessionId });
+      try {
+        await request({ type: "run.start", payload: { sessionId, prompt } });
+        return true;
+      } catch (error) {
+        dispatch({
+          type: "server",
+          message: {
+            type: "error",
+            payload: {
+              message: error instanceof Error ? error.message : String(error),
+            },
+          },
+        });
+        return false;
+      }
+    },
+    [request],
   );
-
   const cancelRun = useCallback(
-    (runId: string) => send({ type: "run.cancel", payload: { runId } }),
+    (runId: string) => {
+      send({ type: "run.cancel", payload: { runId } });
+    },
     [send],
   );
+  const saveCredential = useCallback(
+    async (provider: ProviderId, apiKey: string) => {
+      await request({
+        type: "credentials.save",
+        payload: { provider, apiKey },
+      });
+    },
+    [request],
+  );
+  const deleteCredential = useCallback(
+    async (provider: ProviderId) => {
+      await request({ type: "credentials.delete", payload: { provider } });
+    },
+    [request],
+  );
 
-  const dismissError = useCallback(() => dispatch({ type: "dismissError" }), []);
+  const dismissError = useCallback(
+    () => dispatch({ type: "dismissError" }),
+    [],
+  );
 
   const value = useMemo<OrchestratorValue>(
     () => ({
@@ -297,16 +548,36 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
       selectSession,
       startRun,
       cancelRun,
+      saveCredential,
+      deleteCredential,
       dismissError,
     }),
-    [state, createWorkspace, createSession, selectWorkspace, selectSession, startRun, cancelRun, dismissError],
+    [
+      state,
+      createWorkspace,
+      createSession,
+      selectWorkspace,
+      selectSession,
+      startRun,
+      cancelRun,
+      saveCredential,
+      deleteCredential,
+      dismissError,
+    ],
   );
 
-  return <OrchestratorContext.Provider value={value}>{children}</OrchestratorContext.Provider>;
+  return (
+    <OrchestratorContext.Provider value={value}>
+      {children}
+    </OrchestratorContext.Provider>
+  );
 }
 
 export function useOrchestrator(): OrchestratorValue {
   const value = useContext(OrchestratorContext);
-  if (!value) throw new Error("useOrchestrator must be used inside <OrchestratorProvider>");
+  if (!value)
+    throw new Error(
+      "useOrchestrator must be used inside <OrchestratorProvider>",
+    );
   return value;
 }

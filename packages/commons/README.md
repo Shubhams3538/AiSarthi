@@ -1,15 +1,8 @@
 # commons
 
-To install dependencies:
+Shared Zod schemas, provider metadata, and WebSocket types for aiSarthi. Import
+from `commons/types`. Both backend and frontend validate incoming frames against
+this contract. Request IDs correlate mutation acknowledgements; session snapshots
+include transcripts, runs, and retained output.
 
-```bash
-bun install
-```
-
-To run:
-
-```bash
-bun run index.ts
-```
-
-This project was created using `bun init` in bun v1.4.0. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+Run `bun run check-types` from this directory, or use the root validation scripts.

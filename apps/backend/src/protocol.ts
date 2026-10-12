@@ -16,7 +16,7 @@ import {
 
 export type ParseResult =
   | { ok: true; message: ClientMessage }
-  | { ok: false; error: string };
+  | { ok: false; error: string; requestId?: string };
 
 export function parseClientMessage(raw: unknown): ParseResult {
   let json: unknown;
@@ -26,12 +26,20 @@ export function parseClientMessage(raw: unknown): ParseResult {
     return { ok: false, error: "Message must be valid JSON" };
   }
 
+  const candidate =
+    json && typeof json === "object" && "requestId" in json
+      ? json.requestId
+      : undefined;
+  const requestId =
+    typeof candidate === "string" && candidate.length <= 100
+      ? candidate
+      : undefined;
   const result = ClientMessageSchema.safeParse(json);
   if (!result.success) {
     const detail = result.error.issues
       .map((issue) => `${issue.path.join(".") || "message"}: ${issue.message}`)
       .join("; ");
-    return { ok: false, error: `Invalid message (${detail})` };
+    return { ok: false, error: `Invalid message (${detail})`, requestId };
   }
 
   return { ok: true, message: result.data };

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { PROVIDERS_BY_ID } from "commons/types";
 import { useOrchestrator } from "@/lib/orchestrator";
 
@@ -15,9 +16,12 @@ export function Sidebar({ onAddWorkspace, onNewSession }: SidebarProps) {
     sessions,
     activeWorkspaceId,
     activeSessionId,
+    credentials,
     selectWorkspace,
     selectSession,
   } = useOrchestrator();
+
+  const configuredCount = credentials.filter((entry) => entry.configured).length;
 
   const workspace = workspaces.find((entry) => entry.id === activeWorkspaceId) ?? null;
 
@@ -85,6 +89,9 @@ export function Sidebar({ onAddWorkspace, onNewSession }: SidebarProps) {
           <span className={`dot ${status}`} />
           {status === "connected" ? "orchestrator online" : status}
         </span>
+        <Link className="btn ghost" href="/setup">
+          Agent keys{configuredCount > 0 ? ` (${configuredCount})` : ""}
+        </Link>
       </div>
     </aside>
   );

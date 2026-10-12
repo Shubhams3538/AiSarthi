@@ -1,27 +1,54 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import { PROVIDERS_BY_ID } from "commons/types";
 import { useOrchestrator } from "@/lib/orchestrator";
 
 export function ChatPanel() {
-  const { sessions, activeSessionId, messages, runs, output, startRun, cancelRun } =
-    useOrchestrator();
+  const {
+    sessions,
+    activeSessionId,
+    messages,
+    runs,
+    output,
+    startRun,
+    cancelRun,
+    status,
+    loadingSession,
+    startingSessionId,
+  } = useOrchestrator();
   const [prompt, setPrompt] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
 
-  const session = sessions.find((entry) => entry.id === activeSessionId) ?? null;
-  const activeRun = runs.find((run) => run.status === "running") ?? null;
+  const session =
+    sessions.find((entry) => entry.id === activeSessionId) ?? null;
+  const activeRun =
+    runs.find(
+      (run) => run.sessionId === activeSessionId && run.status === "running",
+    ) ?? null;
   const streaming = activeRun ? (output[activeRun.id] ?? "") : "";
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages.length, streaming]);
 
-  const send = () => {
-    if (!activeSessionId || !prompt.trim() || activeRun) return;
-    startRun(activeSessionId, prompt.trim());
-    setPrompt("");
+  const send = async () => {
+    if (
+      !activeSessionId ||
+      !prompt.trim() ||
+      activeRun ||
+      startingSessionId ||
+      loadingSession ||
+      status !== "connected"
+    )
+      return;
+    if (await startRun(activeSessionId, prompt.trim())) setPrompt("");
   };
 
   const submit = (event: FormEvent) => {
@@ -39,10 +66,12 @@ export function ChatPanel() {
   return (
     <div className="chat">
       <div className="transcript">
-        {messages.length === 0 && !activeRun ? (
+        {loadingSession ? <p className="hint">Loading conversation…</p> : null}
+        {messages.length === 0 && !activeRun && !loadingSession ? (
           <p className="hint">
             Send a prompt to start{" "}
-            {session ? PROVIDERS_BY_ID[session.provider].label : "an agent"} in this session.
+            {session ? PROVIDERS_BY_ID[session.provider].label : "an agent"} in
+            this session.
           </p>
         ) : null}
 
@@ -62,22 +91,44 @@ export function ChatPanel() {
           </div>
         ) : null}
 
+        {runs.length > 0 && !activeRun ? (
+          <p className="hint" role="status">
+            Last run: {runs.at(-1)?.status}
+          </p>
+        ) : null}
         <div ref={endRef} />
       </div>
 
       <form className="composer" onSubmit={submit}>
         <textarea
+          aria-label="Prompt"
+          maxLength={32000}
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder="Ask the agent to change something…"
         />
         <div className="composer-actions">
-          <button type="submit" className="btn primary" disabled={!prompt.trim() || Boolean(activeRun)}>
-            Run
+          <button
+            type="submit"
+            className="btn primary"
+            disabled={
+              !prompt.trim() ||
+              Boolean(activeRun) ||
+              Boolean(startingSessionId) ||
+              loadingSession ||
+              status !== "connected"
+            }
+          >
+            {startingSessionId ? "Starting…" : "Run"}
           </button>
           {activeRun ? (
-            <button type="button" className="btn" onClick={() => cancelRun(activeRun.id)}>
+            <button
+              type="button"
+              className="btn"
+              disabled={status !== "connected"}
+              onClick={() => cancelRun(activeRun.id)}
+            >
               Stop
             </button>
           ) : null}
